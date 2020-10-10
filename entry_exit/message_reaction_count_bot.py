@@ -1,19 +1,20 @@
 from datetime import datetime
 
 import discord
-from discord.ext import commands
 import setting
 import sqlalchemy
-from sqlalchemy import Table, MetaData, DATETIME, Column, Integer, exc
+from discord.ext import commands
+from sqlalchemy import DATETIME, Column, Integer, MetaData, Table, exc
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy_views import CreateView, DropView
+from sqlalchemy.sql import text
+from sqlalchemy_views import CreateView
+
 TOKEN = setting.cToken
 Base = declarative_base()
 bot = commands.Bot(command_prefix='¥')
 
-engine = sqlalchemy.create_engine('sqlite:///sample_db.sqlite3', echo=True)
+engine = sqlalchemy.create_engine('sqlite:///emoji_count.sqlite3', echo=True)
 
 
 class MessageReaction(Base):
@@ -23,16 +24,18 @@ class MessageReaction(Base):
     """
     id = Column(Integer, primary_key=True)
     message_id = Column(Integer, nullable=False)
-    user_id = Column(Integer, nullable=False)
     emoji_id = Column(Integer, nullable=False)
+    user_id = Column(Integer, nullable=False)
     created_at = Column(DATETIME, nullable=False)
     __tablename__ = 'message_reaction'
 
+
 Base.metadata.create_all(bind=engine, checkfirst=True)
+
 
 @bot.event
 async def on_ready():
-    # View追加
+    # View追加 TODO: テーブル、View作成は別ファイルに分離したい。
     if not engine.dialect.has_table(engine, 'reaction_count'):
         view = Table('reaction_count', MetaData())
         definition = text("SELECT emoji_id, count(emoji_id) as count FROM message_reaction GROUP BY emoji_id")
@@ -79,21 +82,45 @@ async def on_raw_reaction_remove(payload):
 
 
 @bot.command(pass_context=True)
-async def rr(ctx):
-    embed = discord.Embed(title="リアクションランキング")
-
+async def emoji_ranking(ctx):
     reaction_count = __get_reaction_count()
+    embed = __create_emoji_ranking_embed(reaction_count)
+    await ctx.send(embed=embed)
+
+
+def __create_emoji_ranking_embed(reaction_count):
+    """
+    絵文字ランキングEmbed作成
+    :return:
+    """
+    embed = discord.Embed(title="絵文字ランキング")
+    embed.add_field(name="トータル", value=__create_ranking_embed_field_value(reaction_count))
+    return embed
+
+
+def __create_ranking_embed_field_value(reaction_count):
     reaction = ""
-    count_text = ""
+
     rank = 1
     for row in reaction_count:
-        reaction += str(rank) + '. ' + str(bot.get_emoji(id=row.emoji_id)) + "\n"
-        rank = rank + 1
-        count_text += str(row.count) + "回\n"
+        if rank == 1:
+            reaction += ":first_place:  "
+        elif rank == 2:
+            reaction += ":second_place:  "
+        elif rank == 3:
+            reaction += ":third_place:  "
+        else:
+            reaction += str(rank).zfill(2) + '. '
 
-    embed.add_field(name="リアクション", value=reaction)
-    embed.add_field(name="回数", value=count_text)
-    await ctx.send(embed=embed)
+        print(bot.get_emoji(id=row.emoji_id))
+
+        reaction += str(bot.get_emoji(id=row.emoji_id)) + "--" + str(row.count) + "回\n"
+        rank = rank + 1
+
+    if reaction == "":
+        reaction = "絵文字は現在使用されていません。"
+
+    return reaction
 
 
 def __save_message_reaction(payload):
@@ -126,7 +153,7 @@ def __delete_message_reaction(payload):
     """
     session = sessionmaker(bind=engine)()
     try:
-        session.query(MessageReaction)\
+        session.query(MessageReaction) \
             .filter(
             MessageReaction.message_id == payload.message_id,
             MessageReaction.user_id == payload.user_id,
@@ -139,7 +166,12 @@ def __delete_message_reaction(payload):
     finally:
         session.close()
 
+
 def __get_reaction_count():
+    """
+    reaction_countから使用回数を取得する。
+    :return:
+    """
     session = sessionmaker(bind=engine)()
     return session.execute("select emoji_id, count from reaction_count order by count desc")
 
